@@ -7,8 +7,19 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     let msg = res.statusText;
     try {
       const body = await res.json();
-      if (body && typeof body.detail === "string") msg = body.detail;
-      else msg = JSON.stringify(body);
+      if (body && typeof body.detail === "string") {
+        msg = body.detail;
+      } else if (Array.isArray(body?.detail)) {
+        // FastAPI/Pydantic 422: turn [{loc, msg, ...}] into a readable line.
+        msg = body.detail
+          .map((d: { loc?: (string | number)[]; msg?: string }) => {
+            const field = d.loc?.filter(x => x !== "body").pop();
+            return field ? `${field}: ${d.msg ?? "无效"}` : d.msg ?? "无效";
+          })
+          .join("；");
+      } else if (body) {
+        msg = JSON.stringify(body);
+      }
     } catch {
       const text = await res.text();
       if (text) msg = text;

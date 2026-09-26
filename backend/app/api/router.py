@@ -8,6 +8,7 @@ from app.schemas.schemas import (
     BatchChainUpdate,
     BatchCreate,
     BatchOut,
+    ChainGroupDissolveOut,
     ChainGroupOut,
     ConflictOut,
     GanttBlock,
@@ -21,8 +22,8 @@ from app.services.oven_engine import (
     RecipeDurations,
     build_occupancies,
     find_conflicts,
+    fmt_hhmm,
     next_free_window,
-    chain_should_wipe_half,
     validate_chain_group,
 )
 
@@ -65,7 +66,7 @@ def _group_members(db: Session, group_id: int, exclude_id: int | None = None) ->
 
 def _reject(db: Session, code: str, oven_id: int, detail: str):
     """Log the conflict and refuse the change: nothing else is committed."""
-    db.add(ConflictLog(batch_code=code, oven_id=oven_id, detail=detail))
+    db.add(ConflictLog(batch_code=code, oven_id=oven_id, detail=detail[:240]))
     db.commit()
     raise HTTPException(409, detail)
 
@@ -130,7 +131,6 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     group_name = (body.chain_group or "").strip()
     group: ChainGroup | None = None
     gap = 0
-    member_ids: set[int] = set()
     if group_name:
         group = _get_group(db, group_name)
         gap = (
@@ -142,22 +142,24 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         members.append(
             ChainMember(-1, code, oven.id, oven.label, body.start_min, body.start_min + recipe.total)
         )
+        # Any chain violation rejects the whole group: the new batch is not stored.
         detail = validate_chain_group(members, gap, group_name)
-        if detail and chain_should_wipe_half(detail):
+        if detail:
             _reject(db, code, oven.id, detail)
-        elif detail:
-            db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail[:240]))
-            db.commit()
-        member_ids = {m.batch_id for m in members} - {-1}
+
+    if db.scalar(select(Batch.id).where(Batch.code == code)):
+        _reject(db, code, oven.id, f"批次号 {code} 已存在，该批次未排入")
 
     candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
-    existing = [o for o in _all_occupancies(db) if o.batch_id not in member_ids]
-    hits = find_conflicts(existing, candidates)
+    hits = find_conflicts(_all_occupancies(db), candidates)
     if hits:
         ex, cand = hits[0]
+        ex_batch = db.get(Batch, ex.batch_id)
+        ex_code = ex_batch.code if ex_batch else f"#{ex.batch_id}"
+        phase = "发酵" if ex.phase == "ferment" else "烘烤"
         detail = (
-            f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
-            f"[{cand.interval.start},{cand.interval.end})"
+            f"撞炉：与批次 {ex_code} 的{phase}段重叠"
+            f"（{fmt_hhmm(cand.interval.start)}–{fmt_hhmm(cand.interval.end)}，半开区间），该批次未排入"
         )
         _reject(db, code, oven.id, detail)
 
@@ -200,7 +202,9 @@ def update_batch_chain(batch_id: int, body: BatchChainUpdate, db: Session = Depe
         raise HTTPException(400, "批次未指定连烤组，无法登记最大空档")
 
     target = _get_group(db, name) if name else None
-    gap = 0
+
+    # --- Validation phase: no ORM mutation may happen before this point, ---
+    # so a rejection only commits the ConflictLog and leaves associations intact.
     if name:
         gap = (
             body.chain_max_gap_min
@@ -211,15 +215,20 @@ def update_batch_chain(batch_id: int, body: BatchChainUpdate, db: Session = Depe
         members.append(_chain_member(db, batch))
         detail = validate_chain_group(members, gap, name)
         if detail:
-            db.add(ConflictLog(batch_code=batch.code, oven_id=batch.oven_id, detail=detail[:240]))
-            db.commit()
-    if old_group and (target is None or old_group.id != target.id):
+            _reject(db, batch.code, batch.oven_id, detail)
+        if old_group and (target is None or old_group.id != target.id):
+            remaining = _group_members(db, old_group.id, exclude_id=batch.id)
+            detail = validate_chain_group(remaining, old_group.max_gap_min, old_group.name)
+            if detail:
+                _reject(db, batch.code, batch.oven_id, detail)
+    elif "chain_group" in fields and old_group:
+        # Explicitly leaving the group: the members left behind must still be valid.
         remaining = _group_members(db, old_group.id, exclude_id=batch.id)
         detail = validate_chain_group(remaining, old_group.max_gap_min, old_group.name)
         if detail:
-            db.add(ConflictLog(batch_code=batch.code, oven_id=batch.oven_id, detail=detail[:240]))
-            db.commit()
+            _reject(db, batch.code, batch.oven_id, detail)
 
+    # --- Apply phase: everything validated, commit once. ---
     if name:
         if target is None:
             target = ChainGroup(name=name, max_gap_min=gap)
@@ -230,9 +239,44 @@ def update_batch_chain(batch_id: int, body: BatchChainUpdate, db: Session = Depe
         batch.chain_group_id = target.id
     elif "chain_group" in fields:
         batch.chain_group_id = None
+
+    # A group with no members left is a ghost: drop it so its name/gap is free.
+    emptied = (
+        old_group
+        if old_group and (target is None or old_group.id != target.id)
+        else None
+    )
+    db.flush()
+    if emptied and not db.scalar(select(Batch.id).where(Batch.chain_group_id == emptied.id).limit(1)):
+        db.delete(emptied)
+
     db.commit()
     db.refresh(batch)
     return _batch_out(db, batch)
+
+
+@api_router.post("/chain-groups/{name}/dissolve", response_model=ChainGroupDissolveOut)
+def dissolve_chain_group(name: str, db: Session = Depends(get_db)):
+    """Escape hatch: split a whole group back into ungrouped single batches.
+
+    Produces no invalid group, so this is always allowed even for legacy
+    groups that were stored before the strict chain rules were enforced.
+    """
+    group = _get_group(db, name.strip())
+    if not group:
+        raise HTTPException(404, "连烤组不存在")
+    dissolved_name = group.name
+    codes = list(
+        db.scalars(
+            select(Batch.code).where(Batch.chain_group_id == group.id).order_by(Batch.start_min)
+        ).all()
+    )
+    members = db.scalars(select(Batch).where(Batch.chain_group_id == group.id)).all()
+    for b in members:
+        b.chain_group_id = None
+    db.delete(group)
+    db.commit()
+    return ChainGroupDissolveOut(dissolved=dissolved_name, member_codes=codes)
 
 
 @api_router.get("/chain-groups", response_model=list[ChainGroupOut])

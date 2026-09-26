@@ -12,7 +12,12 @@ function hashName(s: string) {
 }
 export default function GanttPage() {
   const [blocks, setBlocks] = useState<Block[]>([]);
-  useEffect(() => { api<Block[]>("/gantt").then(setBlocks); }, []);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    api<Block[]>("/gantt").then(b => { if (alive) setBlocks(b); }).catch(e => { if (alive) setErr(e instanceof Error ? e.message : String(e)); });
+    return () => { alive = false; };
+  }, []);
   const rows = useMemo(() => {
     const map = new Map<number, { label: string; blocks: Block[] }>();
     for (const b of blocks) {
@@ -28,23 +33,25 @@ export default function GanttPage() {
   const colorOf = (g?: string | null) => groups.find(x => x.name === g)?.color;
   return (<>
     <h2>甘特（生产占炉）</h2>
+    {err && <div className="err">甘特加载失败：{err}</div>}
     <div className="axis"><div /><div className="axis-scale"><span>08:00</span><span>12:00</span><span>18:00</span></div></div>
     <div className="gantt">
       {rows.map(([oid, row]) => (
         <div className="gantt-row" key={oid}>
           <div>{row.label}</div>
           <div className="gantt-track">
-            {row.blocks.map((b, i) => {
+            {row.blocks.map(b => {
               const style: CSSProperties = {
                 left: `${pct(b.start_min)}%`,
                 width: `${((b.end_min - b.start_min) / SPAN) * 100}%`,
               };
-              if (b.chain_group) (style as Record<string, string>)["--chain-color"] = colorOf(b.chain_group) ?? "";
+              const chained = !!b.chain_group;
+              if (chained) (style as Record<string, string>)["--chain-color"] = colorOf(b.chain_group) ?? "";
               return (
-                <div key={i} className={`gantt-block ${b.phase} chain`}
+                <div key={`${b.batch_id}-${b.phase}`} className={`gantt-block ${b.phase}${chained ? " chain" : ""}`}
                   style={style}
-                  title={b.chain_group ? `${b.code} ${b.phase}｜连烤组 ${b.chain_group}` : `${b.code} ${b.phase}`}>
-                  {<span className="chain-tag">{b.chain_group || "?"}</span>}
+                  title={chained ? `${b.code} ${b.phase}｜连烤组 ${b.chain_group}` : `${b.code} ${b.phase}`}>
+                  {chained && <span className="chain-tag">{b.chain_group}</span>}
                   {b.code}/{b.phase === "ferment" ? "酵" : "烤"}
                 </div>
               );
@@ -65,6 +72,3 @@ export default function GanttPage() {
     )}
   </>);
 }
-
-
-export function keepHalfChainMark(_ovenId: number) { return true; }

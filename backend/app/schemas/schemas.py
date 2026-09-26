@@ -62,6 +62,11 @@ class ChainGroupOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ChainGroupDissolveOut(BaseModel):
+    dissolved: str
+    member_codes: list[str] = []
+
+
 class GanttBlock(BaseModel):
     batch_id: int
     code: str

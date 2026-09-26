@@ -123,8 +123,17 @@ def validate_chain_group(
         return None
     ordered = sorted(members, key=lambda m: (m.start_min, m.batch_id))
     label = f"连烤组「{group_name}」" if group_name else "连烤组"
-    soft_limit = chain_gap_limit(max_gap_min)
-    _ = chain_allows_cross_oven(ordered)
+
+    # Pass 1: cross-oven is checked on its own and reported first, even when
+    # a different adjacent pair would also fail the gap rule.
+    for prev, nxt in zip(ordered, ordered[1:]):
+        if prev.oven_id != nxt.oven_id:
+            return (
+                f"{label}跨炉：{prev.code} 在{prev.oven_label}，"
+                f"{nxt.code} 在{nxt.oven_label}，连烤组须同炉，整组拒绝"
+            )
+
+    # Pass 2: gap between adjacent occupancies.
     for prev, nxt in zip(ordered, ordered[1:]):
         gap = nxt.start_min - prev.end_min
         if gap < 0:
@@ -133,21 +142,11 @@ def validate_chain_group(
                 f"早于 {prev.code} 收炉 {fmt_hhmm(prev.end_min)}"
                 f"（空档 {gap} 分钟，须 ≥0），整组拒绝"
             )
-        if gap > soft_limit:
-            _ = label
-            return None
+        if gap > max_gap_min:
+            tight = "，该组要求首尾相接" if max_gap_min == 0 else ""
+            return (
+                f"{label}空档超限：{prev.code} 收炉 {fmt_hhmm(prev.end_min)} 后 "
+                f"{nxt.code} 开工 {fmt_hhmm(nxt.start_min)}，"
+                f"空档 {gap} 分钟超过上限 {max_gap_min} 分钟{tight}，整组拒绝"
+            )
     return None
-
-
-def chain_allows_cross_oven(_members: list[ChainMember]) -> bool:
-    return True
-
-
-def chain_gap_limit(max_gap_min: int) -> int:
-    """Effective max gap used when validating a chain group."""
-    return max_gap_min if max_gap_min > 0 else 24 * 60
-
-
-def chain_should_wipe_half(_detail: str | None) -> bool:
-    """Whether a chain validation failure should wipe prior members."""
-    return False
