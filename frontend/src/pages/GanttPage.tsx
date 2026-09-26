@@ -22,8 +22,21 @@ export default function GanttPage() {
     return [...map.entries()];
   }, [blocks]);
   const groups = useMemo(() => {
-    const names = [...new Set(blocks.map(b => b.chain_group).filter((g): g is string => !!g))].sort();
-    return names.map(name => ({ name, color: CHAIN_COLORS[hashName(name) % CHAIN_COLORS.length] }));
+    // A group is only rendered as a chain when every block sits on ONE oven.
+    // Legacy data left behind by the old cross-oven bug is shown uncolored
+    // rather than as a half-chain smeared across ovens.
+    const ovensByName = new Map<string, Set<number>>();
+    for (const b of blocks) {
+      if (!b.chain_group) continue;
+      const set = ovensByName.get(b.chain_group) ?? new Set<number>();
+      set.add(b.oven_id);
+      ovensByName.set(b.chain_group, set);
+    }
+    return [...ovensByName.entries()]
+      .filter(([, ovens]) => ovens.size === 1)
+      .map(([name]) => name)
+      .sort()
+      .map(name => ({ name, color: CHAIN_COLORS[hashName(name) % CHAIN_COLORS.length] }));
   }, [blocks]);
   const colorOf = (g?: string | null) => groups.find(x => x.name === g)?.color;
   return (<>
@@ -34,17 +47,19 @@ export default function GanttPage() {
         <div className="gantt-row" key={oid}>
           <div>{row.label}</div>
           <div className="gantt-track">
-            {row.blocks.map((b, i) => {
+            {row.blocks.map((b) => {
               const style: CSSProperties = {
                 left: `${pct(b.start_min)}%`,
                 width: `${((b.end_min - b.start_min) / SPAN) * 100}%`,
               };
-              if (b.chain_group) (style as Record<string, string>)["--chain-color"] = colorOf(b.chain_group) ?? "";
+              const chainColor = b.chain_group ? colorOf(b.chain_group) : undefined;
+              const cls = `gantt-block ${b.phase}${chainColor ? " chain" : ""}`;
+              if (chainColor) (style as Record<string, string>)["--chain-color"] = chainColor;
               return (
-                <div key={i} className={`gantt-block ${b.phase} chain`}
+                <div key={`${b.batch_id}-${b.phase}`} className={cls}
                   style={style}
-                  title={b.chain_group ? `${b.code} ${b.phase}｜连烤组 ${b.chain_group}` : `${b.code} ${b.phase}`}>
-                  {<span className="chain-tag">{b.chain_group || "?"}</span>}
+                  title={chainColor ? `${b.code} ${b.phase}｜连烤组 ${b.chain_group}` : `${b.code} ${b.phase}`}>
+                  {chainColor && <span className="chain-tag">{b.chain_group}</span>}
                   {b.code}/{b.phase === "ferment" ? "酵" : "烤"}
                 </div>
               );
@@ -65,6 +80,3 @@ export default function GanttPage() {
     )}
   </>);
 }
-
-
-export function keepHalfChainMark(_ovenId: number) { return true; }

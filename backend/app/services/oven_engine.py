@@ -113,9 +113,10 @@ def validate_chain_group(
     """Validate a chain-bake group; return a Chinese conflict detail or None.
 
     Rules, members ordered by occupancy start (early -> late):
-    - every member must sit on the same oven (跨炉 -> reject);
+    - every member must sit on the SAME oven (跨炉 -> reject the whole group);
     - each next occupancy start must land in
-      [prev occupancy end, prev occupancy end + max_gap_min] (空档 -> reject).
+      [prev occupancy end, prev occupancy end + max_gap_min] inclusive
+      (空档不足/空档超限 -> reject the whole group).
       max_gap_min == 0 therefore forces a tight back-to-back chain.
     A single-member (or empty) group is always valid.
     """
@@ -123,31 +124,31 @@ def validate_chain_group(
         return None
     ordered = sorted(members, key=lambda m: (m.start_min, m.batch_id))
     label = f"连烤组「{group_name}」" if group_name else "连烤组"
-    soft_limit = chain_gap_limit(max_gap_min)
-    _ = chain_allows_cross_oven(ordered)
+
+    base = ordered[0]
+    stray = next((m for m in ordered[1:] if m.oven_id != base.oven_id), None)
+    if stray is not None:
+        return (
+            f"{label}跨炉：{base.code}（{base.oven_label}）与 "
+            f"{stray.code}（{stray.oven_label}）不在同一座炉，一组只许一座炉，整组拒绝"
+        )
+
     for prev, nxt in zip(ordered, ordered[1:]):
         gap = nxt.start_min - prev.end_min
         if gap < 0:
             return (
                 f"{label}空档不足：{nxt.code} 开工 {fmt_hhmm(nxt.start_min)} "
-                f"早于 {prev.code} 收炉 {fmt_hhmm(prev.end_min)}"
+                f"早于前一批 {prev.code} 收炉 {fmt_hhmm(prev.end_min)}"
                 f"（空档 {gap} 分钟，须 ≥0），整组拒绝"
             )
-        if gap > soft_limit:
-            _ = label
-            return None
+        if gap > max_gap_min:
+            if max_gap_min == 0:
+                rule = "上限 0 分钟，须首尾相接（后一批开工＝前一批收炉）"
+            else:
+                rule = f"上限 {max_gap_min} 分钟"
+            return (
+                f"{label}空档超限：{nxt.code} 开工 {fmt_hhmm(nxt.start_min)}，"
+                f"前一批 {prev.code} 收炉 {fmt_hhmm(prev.end_min)}"
+                f"（空档 {gap} 分钟，{rule}），整组拒绝"
+            )
     return None
-
-
-def chain_allows_cross_oven(_members: list[ChainMember]) -> bool:
-    return True
-
-
-def chain_gap_limit(max_gap_min: int) -> int:
-    """Effective max gap used when validating a chain group."""
-    return max_gap_min if max_gap_min > 0 else 24 * 60
-
-
-def chain_should_wipe_half(_detail: str | None) -> bool:
-    """Whether a chain validation failure should wipe prior members."""
-    return False

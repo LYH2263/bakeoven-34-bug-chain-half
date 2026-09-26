@@ -21,8 +21,8 @@ from app.services.oven_engine import (
     RecipeDurations,
     build_occupancies,
     find_conflicts,
+    fmt_hhmm,
     next_free_window,
-    chain_should_wipe_half,
     validate_chain_group,
 )
 
@@ -65,9 +65,19 @@ def _group_members(db: Session, group_id: int, exclude_id: int | None = None) ->
 
 def _reject(db: Session, code: str, oven_id: int, detail: str):
     """Log the conflict and refuse the change: nothing else is committed."""
-    db.add(ConflictLog(batch_code=code, oven_id=oven_id, detail=detail))
+    db.add(ConflictLog(batch_code=code, oven_id=oven_id, detail=detail[:240]))
     db.commit()
     raise HTTPException(409, detail)
+
+
+def _log_conflict(db: Session, code: str, oven_id: int, detail: str):
+    """Record a conflict observation without aborting the current change."""
+    db.add(ConflictLog(batch_code=code, oven_id=oven_id, detail=detail[:240]))
+
+
+def _batch_code(db: Session, batch_id: int) -> str:
+    b = db.get(Batch, batch_id)
+    return b.code if b else f"#{batch_id}"
 
 
 def _get_group(db: Session, name: str) -> ChainGroup | None:
@@ -142,12 +152,11 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         members.append(
             ChainMember(-1, code, oven.id, oven.label, body.start_min, body.start_min + recipe.total)
         )
+        # Any chain violation rejects the WHOLE submission: the batch is not
+        # created and the group's registered gap is not touched.
         detail = validate_chain_group(members, gap, group_name)
-        if detail and chain_should_wipe_half(detail):
+        if detail:
             _reject(db, code, oven.id, detail)
-        elif detail:
-            db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail[:240]))
-            db.commit()
         member_ids = {m.batch_id for m in members} - {-1}
 
     candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
@@ -155,9 +164,12 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     hits = find_conflicts(existing, candidates)
     if hits:
         ex, cand = hits[0]
+        phase_zh = "发酵" if ex.phase == "ferment" else "烘烤"
+        other = _batch_code(db, ex.batch_id)
         detail = (
-            f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
-            f"[{cand.interval.start},{cand.interval.end})"
+            f"{code} 与批次 {other} 的{phase_zh}段撞炉："
+            f"{code}[{fmt_hhmm(cand.interval.start)},{fmt_hhmm(cand.interval.end)}) "
+            f"与 {other} 占炉区间重叠"
         )
         _reject(db, code, oven.id, detail)
 
@@ -207,18 +219,27 @@ def update_batch_chain(batch_id: int, body: BatchChainUpdate, db: Session = Depe
             if gap_provided
             else (target.max_gap_min if target else 0)
         )
+        # Joining a group / changing its gap: the resulting group must be
+        # fully valid, otherwise the edit is rejected wholesale.
         members = _group_members(db, target.id, exclude_id=batch.id) if target else []
         members.append(_chain_member(db, batch))
         detail = validate_chain_group(members, gap, name)
         if detail:
-            db.add(ConflictLog(batch_code=batch.code, oven_id=batch.oven_id, detail=detail[:240]))
-            db.commit()
+            _reject(db, batch.code, batch.oven_id, detail)
     if old_group and (target is None or old_group.id != target.id):
+        # Leaving a group: validate the members left behind.
         remaining = _group_members(db, old_group.id, exclude_id=batch.id)
         detail = validate_chain_group(remaining, old_group.max_gap_min, old_group.name)
         if detail:
-            db.add(ConflictLog(batch_code=batch.code, oven_id=batch.oven_id, detail=detail[:240]))
-            db.commit()
+            ovens = {m.oven_id for m in remaining}
+            if len(ovens) <= 1:
+                # Same oven but gap would break: refuse, so a stored group is
+                # always a valid chain; peel batches from the tail to dismantle.
+                _reject(db, batch.code, batch.oven_id, detail)
+            # Cross-oven remainder can only be legacy dirt written by the old
+            # bug; blocking the unassign would trap it in the UI. Let the batch
+            # leave and record the remaining group's violation.
+            _log_conflict(db, batch.code, batch.oven_id, detail)
 
     if name:
         if target is None:
