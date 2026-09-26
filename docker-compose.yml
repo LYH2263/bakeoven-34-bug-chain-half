@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bakeoven
+      POSTGRES_PASSWORD: bakeoven
+      POSTGRES_DB: bakeoven
+    ports: ["5446:5432"]
+    volumes: [bakeoven_pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bakeoven -d bakeoven"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bakeoven:bakeoven@db:5432/bakeoven
+      SEED_ON_EMPTY: "true"
+    ports: ["9500:9500"]
+    depends_on:
+      db:
+        condition: service_healthy
+  frontend:
+    build: ./frontend
+    ports: ["4500:80"]
+    depends_on: [api]
+volumes:
+  bakeoven_pg:

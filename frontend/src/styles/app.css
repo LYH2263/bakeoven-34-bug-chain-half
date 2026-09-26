@@ -1,0 +1,353 @@
+:root {
+  --bake-void: #0c0806;
+  --bake-steel: #2a221c;
+  --bake-copper: #f2b880;
+  --bake-ember: #d97941;
+  --bake-dough: #7a5c3e;
+  --bake-muted: #c4a88a;
+  --text: #fff4e8;
+  --panel: #221913;
+  --line: #3a2b20;
+  --accent: var(--bake-copper);
+  --ferment: var(--bake-dough);
+  --bake: var(--bake-ember);
+  --track: #1a1410;
+  font-family: "Noto Sans SC", "IBM Plex Sans", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bake-void);
+  color: var(--text);
+  min-height: 100vh;
+}
+a { color: inherit; text-decoration: none; }
+
+/* —— GANTT WORKBENCH: recipe drawer | oven lanes | gantt deck | floating conflicts —— */
+.workbench-shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 60% 40% at 80% 0%, rgba(217, 121, 65, .12), transparent 50%),
+    linear-gradient(180deg, #1a100c, var(--bake-void));
+}
+
+.recipe-drawer {
+  width: 200px;
+  background: #120e0a;
+  border-right: 2px solid #3a2b20;
+  position: relative;
+  transition: width .2s ease;
+  display: flex;
+}
+.recipe-drawer--collapsed {
+  width: 36px;
+}
+.recipe-drawer--collapsed .recipe-drawer-inner {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  overflow: hidden;
+  padding: 0;
+}
+.recipe-drawer-toggle {
+  position: absolute;
+  right: -14px;
+  top: 16px;
+  z-index: 4;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #5a4030;
+  background: #2a1c14;
+  color: var(--bake-copper);
+  cursor: pointer;
+  font-size: .85rem;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.recipe-drawer-inner {
+  padding: 1rem .85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 200px;
+  transition: opacity .15s;
+}
+.recipe-drawer-brand {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+}
+.recipe-mark {
+  width: 34px; height: 34px;
+  background: var(--bake-ember);
+  color: #1a0c06;
+  font-weight: 900;
+  font-size: .7rem;
+  display: grid; place-items: center;
+  border-radius: 4px;
+  clip-path: polygon(10% 0, 100% 0, 90% 100%, 0 100%);
+}
+.recipe-name { font-weight: 800; color: var(--bake-copper); font-size: .9rem; }
+.recipe-sub { font-size: .65rem; color: var(--bake-muted); }
+.recipe-nav { display: flex; flex-direction: column; gap: 4px; }
+.recipe-link {
+  padding: .45rem .55rem;
+  border-left: 3px solid transparent;
+  color: var(--bake-muted);
+  font-size: .85rem;
+  background: transparent;
+  border-radius: 0 4px 4px 0;
+}
+.recipe-link:hover { color: var(--text); background: #1a1410; }
+.recipe-link--on {
+  border-left-color: var(--bake-ember);
+  color: var(--bake-copper);
+  background: #1a1410;
+  font-weight: 700;
+}
+.recipe-note {
+  margin-top: auto;
+  font-size: .65rem;
+  color: #6a5a4a;
+  line-height: 1.4;
+  border-top: 1px dashed #3a2b20;
+  padding-top: .75rem;
+}
+
+.workbench-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.oven-lane-headers {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: .5rem;
+  align-items: stretch;
+  padding: .55rem .9rem;
+  background: #160e0a;
+  border-bottom: 2px solid #4a3020;
+  flex-shrink: 0;
+}
+.oven-lane-lead {
+  font-size: .65rem;
+  letter-spacing: .15em;
+  color: var(--bake-muted);
+  display: flex;
+  align-items: center;
+  writing-mode: horizontal-tb;
+}
+.oven-lane-track {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.oven-lane-chip {
+  flex: 0 0 auto;
+  min-width: 110px;
+  padding: .4rem .65rem;
+  background: linear-gradient(180deg, #3a2818, #1a120c);
+  border: 1px solid #5a4030;
+  border-radius: 4px 4px 0 0;
+  border-bottom: 3px solid var(--bake-ember);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: .78rem;
+}
+.oven-lane-id {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .6rem;
+  color: var(--bake-muted);
+}
+.oven-lane-cap { font-size: .65rem; color: #8a7060; }
+.oven-lane-empty { color: var(--bake-muted); font-size: .85rem; align-self: center; }
+
+.gantt-deck {
+  flex: 1;
+  padding: 1rem 1.15rem 4.5rem;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* Floating conflict chips (industrial badges, not calendar toasts) */
+.conflict-badge-float {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+  max-width: min(320px, 90%);
+  z-index: 6;
+  pointer-events: none;
+}
+.conflict-badge-float > * { pointer-events: auto; }
+.conflict-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: .45rem .65rem;
+  background: #3a1810;
+  border: 1px solid #c06040;
+  border-left: 4px solid #ff6b4a;
+  border-radius: 2px 8px 8px 2px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.45);
+  font-size: .72rem;
+  color: #ffd0c0;
+  max-width: 100%;
+}
+.conflict-chip--ok {
+  background: #1a2410;
+  border-color: #5a8040;
+  border-left-color: #8ada60;
+  color: #b8e090;
+}
+.conflict-chip-code {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 800;
+  color: #ffb090;
+}
+.conflict-chip-detail {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: .85;
+}
+
+h2 {
+  margin: 0 0 .85rem;
+  font-size: 1.1rem;
+  color: var(--bake-copper);
+  letter-spacing: .04em;
+}
+.toolbar { display: flex; gap: .75rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+select, input, .gantt-deck button, .toolbar button {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 4px; padding: .5rem .75rem; font: inherit;
+}
+.gantt-deck button, .toolbar button {
+  background: var(--bake-copper); color: #2a1608; font-weight: 700;
+  border: none; cursor: pointer;
+}
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td {
+  border-bottom: 1px solid var(--line); padding: .5rem .35rem;
+  text-align: left; font-size: .92rem;
+}
+.mono { font-family: "IBM Plex Mono", monospace; }
+.err { color: #ff9b7a; } .ok { color: #e8c48a; }
+
+.gantt { display: flex; flex-direction: column; gap: .65rem; }
+.gantt-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: .65rem;
+  align-items: center;
+}
+.gantt-track {
+  position: relative;
+  height: 40px;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--track) 0,
+      var(--track) calc(12.5% - 1px),
+      #2a2018 calc(12.5% - 1px),
+      #2a2018 12.5%
+    );
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow: inset 0 0 12px rgba(0,0,0,.4);
+}
+.gantt-block {
+  position: absolute; top: 5px; bottom: 5px; border-radius: 2px; font-size: 11px;
+  display: flex; align-items: center; justify-content: center; color: #fff;
+  overflow: hidden; padding: 0 4px; white-space: nowrap;
+  font-family: "IBM Plex Mono", monospace;
+}
+.gantt-block.ferment {
+  background: var(--ferment);
+  border: 1px solid #a08060;
+}
+.gantt-block.bake {
+  background: var(--bake);
+  border: 1px solid #f0a060;
+  box-shadow: 0 0 8px rgba(217, 121, 65, .35);
+}
+.axis {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: .65rem;
+  color: var(--bake-muted);
+  font-size: .75rem;
+  margin-bottom: .5rem;
+}
+.axis-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+/* —— 同炉连烤组：甘特标记、图例、批次表徽标 —— */
+.gantt-block.chain {
+  border-color: var(--chain-color, var(--bake-copper));
+  box-shadow: inset 0 4px 0 var(--chain-color, var(--bake-copper)), 0 0 8px rgba(0,0,0,.45);
+}
+.chain-tag {
+  flex: 0 0 auto;
+  background: var(--chain-color, var(--bake-copper));
+  color: #1a0c06;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 2px 3px;
+  margin-right: 3px;
+  border-radius: 2px;
+}
+.chain-legend {
+  display: flex;
+  gap: .75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: .85rem;
+  padding: .5rem .65rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: .78rem;
+  color: var(--bake-muted);
+}
+.chain-legend-title { font-weight: 700; color: var(--bake-copper); }
+.chain-legend-item { display: inline-flex; align-items: center; gap: 4px; font-family: "IBM Plex Mono", monospace; color: var(--text); }
+.chain-swatch {
+  display: inline-block;
+  width: 14px; height: 10px;
+  border-radius: 2px;
+  box-shadow: inset 0 3px 0 rgba(0,0,0,.35);
+}
+.chain-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: .65rem;
+  font-weight: 800;
+  color: #1a0c06;
+  background: var(--bake-copper);
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.table .row-save { padding: .25rem .55rem; font-size: .75rem; }
+.row-ok { margin-left: 6px; font-size: .72rem; color: #e8c48a; }
+.row-err { margin-top: 4px; max-width: 220px; font-size: .72rem; line-height: 1.3; }
